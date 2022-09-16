@@ -1,0 +1,15 @@
+[package]
+name = "evaperative_cooling"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+atomecs ={ path = "../AtomECS" }
+rand = "0.8.3"
+nalgebra = { version = "^0.31.0", features = ["serde-serialize"] }
+atomecs-derive = "0.1.0"
+rayon = "1.5.0"
+specs={ version="0.17.0", features=["rayon"] }
+specs-derive = "0.4.1"
