@@ -1,7 +1,7 @@
 //! Single particle in a cross beam optical dipole trap
 extern crate atomecs as lib;
 extern crate nalgebra;
-use lib::atom::{self, Atom, Force, Mass, Position, Velocity};
+use lib::atom::{Atom, Force, Mass, Position, Velocity};
 use lib::dipole::{self, DipolePlugin};
 use lib::integrator::Timestep;
 use lib::laser::{self, LaserPlugin};
@@ -17,7 +17,10 @@ use lib::initiate::NewlyCreated;
 use std::fs::File;
 use std::io::{Error, Write};
 use lib::collisions::{CollisionPlugin, ApplyCollisionsOption, CollisionParameters, CollisionsTracker};
-// use lib::atom_sources::gaussian::{GaussianCreateAtomsSystem};
+use lib::sim_region::{ SimulationVolume, VolumeType};
+use lib::shapes::Sphere;
+use lib::ramp;
+use lib::ramp::{Lerp, Ramp, RampUpdateSystem};
 
 const BEAM_NUMBER: usize = 2;
 
@@ -26,21 +29,39 @@ fn main() {
 
     // Configure simulation output.
     let mut sim_builder = SimulationBuilder::default();
+    sim_builder.world.register::<NewlyCreated>();
+
+    sim_builder.world.register::<RampUpdateSystem>();
 
     sim_builder.add_plugin(LaserPlugin::<{BEAM_NUMBER}>);
     sim_builder.add_plugin(DipolePlugin::<{BEAM_NUMBER}>);
 
-    sim_builder.world.register::<NewlyCreated>();
     sim_builder.add_end_frame_systems();
     sim_builder.add_plugin(CollisionPlugin);
 
-    sim_builder.add_plugin(FileOutputPlugin::<Position, Text, Atom>::new("D:/data_1/pos.txt".to_string(), 1));
-    sim_builder.add_plugin(FileOutputPlugin::<Velocity, Text, Atom>::new("D:/data_1/vel.txt".to_string(), 1));
-    sim_builder.add_plugin(FileOutputPlugin::<Position, XYZ, Atom>::new("D:/data_1/position.xyz".to_string(), 1));
-    sim_builder.add_plugin(FileOutputPlugin::<LaserIntensitySamplers<{BEAM_NUMBER}>, Text, LaserIntensitySamplers<{BEAM_NUMBER}>>::new("intensity.txt".to_string(), 1));
+    sim_builder.add_plugin(FileOutputPlugin::<Position, Text, Atom>::new("D:/data_1/pos_3.txt".to_string(), 100));
+    sim_builder.add_plugin(FileOutputPlugin::<Velocity, Text, Atom>::new("D:/data_1/vel_3.txt".to_string(), 100));
+    sim_builder.add_plugin(FileOutputPlugin::<Position, XYZ, Atom>::new("D:/data_1/position_3.xyz".to_string(), 100));
+    sim_builder.add_plugin(FileOutputPlugin::<LaserIntensitySamplers<{BEAM_NUMBER}>, Text, LaserIntensitySamplers<{BEAM_NUMBER}>>::new("D:/data_1/intensity_3.txt".to_string(), 100));
+
+    // sim_builder.add_plugin(FileOutputPlugin::<Position, Text, Atom>::new("pos.txt".to_string(), 1));
+    // sim_builder.add_plugin(FileOutputPlugin::<Velocity, Text, Atom>::new("vel.txt".to_string(), 1));
 
     let mut sim = sim_builder.build();
 
+    // Creating simulation volume
+    let sphere_pos = Vector3::new(0.0, 0.0, 0.0);
+    let sphere_radius = 60.0e-6 / 2.0_f64.sqrt();
+    sim.world
+        .create_entity()
+        .with(Position { pos: sphere_pos })
+        .with(Sphere {
+            radius: sphere_radius,
+        })
+        .with(SimulationVolume {
+            volume_type: VolumeType::Inclusive,
+        })
+        .build();
 
     // Create dipole laser.
     let power = 7.0;
@@ -85,13 +106,12 @@ fn main() {
         })
         .build();
 
-
     let p_dist = Normal::new(0.0, 50e-6).unwrap();
     let v_dist = Normal::new(0.0, 0.004).unwrap(); // ~100nK
 
     // Create a single test atom
     let atom_number = 25000;
-    for _i in 0..atom_number {
+    for _ in 0..atom_number {
         sim.world
             .create_entity()
             .with(Atom)
@@ -101,10 +121,10 @@ fn main() {
                 pos: Vector3::new(
                     p_dist.sample(&mut rand::thread_rng()),
                     p_dist.sample(&mut rand::thread_rng()),
-                    p_dist.sample(&mut rand::thread_rng()), //TOP traps have tighter confinement along quadrupole axis
+                    p_dist.sample(&mut rand::thread_rng()),
                 ),
             })
-            .with(atom::Velocity {
+            .with(Velocity {
                 vel: Vector3::new(
                     v_dist.sample(&mut rand::thread_rng()),
                     v_dist.sample(&mut rand::thread_rng()),
@@ -121,11 +141,11 @@ fn main() {
     sim.world.insert(ApplyCollisionsOption);
     sim.world.insert(CollisionParameters {
         macroparticle: 4e2,
-        box_number: 200,  //Any number large enough to cover entire cloud with collision boxes. Overestimating box number will not affect performance.
-        box_width: 20e-6, //Too few particles per box will both underestimate collision rate and cause large statistical fluctuations.
+        box_number: 1000,  //Any number large enough to cover entire cloud with collision boxes. Overestimating box number will not affect performance.
+        box_width: 1e-6, //Too few particles per box will both underestimate collision rate and cause large statistical fluctuations.
                           //Boxes must also be smaller than typical length scale of density variations within the cloud, since the collisions model treats gas within a box as homogeneous.
-        sigma: 3.5e-16,   //Approximate collisional cross section of Rb87
-        collision_limit: 10_000_000.0, //Maximum number of collisions that can be calculated in one frame.
+        sigma: 1.95e-19,   //Approximate collisional cross section of Sr
+        collision_limit: 10_000.0, //Maximum number of collisions that can be calculated in one frame.
                                        //This avoids absurdly high collision numbers if many atoms are initialised with the same position, for example.
     });
     sim.world.insert(CollisionsTracker {
@@ -138,10 +158,10 @@ fn main() {
     sim.world.insert(Timestep { delta: 1.0e-6 });
     //Timestep must also be much smaller than mean collision time
 
-    let mut filename = File::create("D:/data_1/collisions.txt").expect("Cannot create file.");
+    let mut filename = File::create("D:/data_1/collisions_3.txt").expect("Cannot create file.");
 
     // Run the simulation for a number of steps.
-    for _i in 0..10_000 {
+    for _i in 0..50_000 {
         sim.step();
 
         if (_i > 0) && (_i % 50_i32 == 0) {
