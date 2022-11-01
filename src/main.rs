@@ -7,12 +7,11 @@ use lib::integrator::Timestep;
 use lib::laser::{self, LaserPlugin};
 use lib::laser::gaussian::GaussianBeam;
 use lib::laser::intensity::{LaserIntensitySamplers};
-use lib::output::file::{FileOutputPlugin, Text, XYZ};
+use lib::output::file::{FileOutputPlugin, Text};
 use lib::simulation::SimulationBuilder;
 use nalgebra::Vector3;
 use specs::prelude::*;
 use std::time::Instant;
-use rand_distr::{Distribution, Normal};
 use lib::initiate::NewlyCreated;
 use std::fs::File;
 use std::io::{Error, Write};
@@ -20,6 +19,14 @@ use lib::collisions::{CollisionPlugin, ApplyCollisionsOption, CollisionParameter
 use lib::sim_region::{ SimulationVolume, VolumeType};
 use lib::shapes::Sphere;
 use lib::ramp::{Ramp, RampUpdateSystem};
+
+use easy_ml::matrices::Matrix;
+use easy_ml::distributions::MultivariateGaussian;
+use rand::{Rng, SeedableRng};
+use rand::distributions::{DistIter, Standard};
+use rand_chacha::ChaCha8Rng;
+
+// use lib::gravity::GravityPlugin;
 
 
 const BEAM_NUMBER: usize = 2;
@@ -31,12 +38,14 @@ fn main() {
     let wavelength    = 1064.0e-9; //m
     let e_radius      = 60.0e-6/2.0_f64.sqrt(); //m
 
-    let dt            = 1.0e-5;    //s
-    let sim_length    = 100_000;       //none
+    let dt            = 1.0e-6;      //s
+    let sim_length    = 100000;       //none
 
-    let initial_power = 7.0;       //W
-    let final_power   = 0.1;       //W
-    let rate          = 0.0;       //W/s
+    let initial_power = 7.0;             //W
+    let final_power   = 0.25;          //W
+    let rate          = (  final_power - initial_power   ) / ( 0.5 * (sim_length as f64) * dt ); //0.0;       //W/s
+
+    let data_rate = 500;
 
     // Configure simulation output.
     let mut sim_builder = SimulationBuilder::default();
@@ -46,32 +55,29 @@ fn main() {
     sim_builder.add_plugin(DipolePlugin::<{BEAM_NUMBER}>);
     sim_builder.add_end_frame_systems();
     sim_builder.add_plugin(CollisionPlugin);
-    sim_builder.add_plugin(FileOutputPlugin::<Position, Text, Atom>::new("D:/data_1/pos_ramp_test_00.txt".to_string(), 1000));
-    sim_builder.add_plugin(FileOutputPlugin::<Velocity, Text, Atom>::new("D:/data_1/vel_ramp_test_00.txt".to_string(), 1000));
+    sim_builder.add_plugin(FileOutputPlugin::<Position, Text, Atom>::new("D:/data_1/pos_ramp_test_007.txt".to_string(), data_rate));
+    sim_builder.add_plugin(FileOutputPlugin::<Velocity, Text, Atom>::new("D:/data_1/vel_ramp_test_007.txt".to_string(), data_rate));
     sim_builder.add_plugin(
         FileOutputPlugin::<
             LaserIntensitySamplers<{BEAM_NUMBER}>,
             Text,
             LaserIntensitySamplers<{BEAM_NUMBER}>>::new(
-                "D:/data_1/intensity_ramp_test_00.txt".to_string(),
-                1000
+                "D:/data_1/intensity_ramp_test_007.txt".to_string(),
+                data_rate
             )
     );
-
+    // sin_builder.add_plugin(GravityPlugin);
     sim_builder.dispatcher_builder.add(
         RampUpdateSystem::<GaussianBeam>::default(),
         "update_comp",
         &[],
     );
 
-    // sim_builder.add_plugin(FileOutputPlugin::<Position, Text, Atom>::new("pos.txt".to_string(), 1));
-    // sim_builder.add_plugin(FileOutputPlugin::<Velocity, Text, Atom>::new("vel.txt".to_string(), 1));
-
     let mut sim = sim_builder.build();
 
     // Creating simulation volume
     let sphere_pos = Vector3::new(0.0, 0.0, 0.0);
-    let sphere_radius = 60.0e-6 / 2.0_f64.sqrt();
+    let sphere_radius = 60.0e-6;
 
     sim.world
         .create_entity()
@@ -88,25 +94,77 @@ fn main() {
     let mut frames = vec![];
 
     // Appending the ramp powers for each frame to the vector, this in the form of a paired list (time, componant value)
-    for i in 0..sim_length {
-        frames.append(
-            &mut vec![
-                (
-                    i as f64 * dt,
-                    GaussianBeam {
-                        intersection: Vector3::new(0.0, 0.0, 0.0),
-                        e_radius:  e_radius,
-                        // This is a exponetial ramp down of the power
-                        power: ( initial_power - final_power ) * 2.0_f64.powf( -1.0 * rate * i as f64 * dt ) + final_power,
-                        direction: Vector3::x(),
-                        rayleigh_range: crate::laser::gaussian::calculate_rayleigh_range(&wavelength, &e_radius),
-                        ellipticity: 0.0
-                    }
-                )
-            ]
-        )
-    }
+    // for i in 0..sim_length {
+    //     frames.append(
+    //         &mut vec![
+    //             (
+    //                 i as f64 * dt,
+    //                 GaussianBeam {
+    //                     intersection: Vector3::new(0.0, 0.0, 0.0),
+    //                     e_radius:  e_radius,
+    //                     // This is a exponetial ramp down of the power
+    //                     // power: ( initial_power - final_power ) * 2.0_f64.powf( -1.0 * rate * i as f64 * dt ) + final_power,
+    //                     // Linear ramp for testing
+    //                     power: rate * ( i as f64 ) * dt + initial_power,
+    //
+    //                     // power: ( 0.187 / (0.01 * 2.0 * 3.1415) ) * 2.0_f64.powf( - (  i as f64 * dt - 0.1 ).powf(2.0) / ( 2.0 * 0.01_f64.powf(2.0) ) ) + 7.0,
+    //                     direction: Vector3::x(),
+    //                     rayleigh_range: crate::laser::gaussian::calculate_rayleigh_range(&wavelength, &e_radius),
+    //                     ellipticity: 0.0
+    //                 }
+    //             )
+    //         ]
+    //     )
+    // }
 
+
+    for i in 0..sim_length {
+        if i <= (( sim_length as f64 * 0.5) as i32 ) {
+            frames.append(
+                &mut vec![
+                    (
+                        i as f64 * dt,
+                        GaussianBeam {
+                            intersection: Vector3::new(0.0, 0.0, 0.0),
+                            e_radius:  e_radius,
+                            // This is a exponetial ramp down of the power
+                            // power: ( initial_power - final_power ) * 2.0_f64.powf( -1.0 * rate * i as f64 * dt ) + final_power,
+                            // Linear ramp for testing
+                            power: rate * ( i as f64 ) * dt + initial_power,
+
+                            // power: ( 0.187 / (0.01 * 2.0 * 3.1415) ) * 2.0_f64.powf( - (  i as f64 * dt - 0.1 ).powf(2.0) / ( 2.0 * 0.01_f64.powf(2.0) ) ) + 7.0,
+                            direction: Vector3::x(),
+                            rayleigh_range: crate::laser::gaussian::calculate_rayleigh_range(&wavelength, &e_radius),
+                            ellipticity: 0.0
+                        }
+                    )
+                ]
+            )
+        }
+        else {
+            frames.append(
+                &mut vec![
+                    (
+                        i as f64 * dt,
+                        GaussianBeam {
+                            intersection: Vector3::new(0.0, 0.0, 0.0),
+                            e_radius:  e_radius,
+                            // This is a exponetial ramp down of the power
+                            // power: ( initial_power - final_power ) * 2.0_f64.powf( -1.0 * rate * i as f64 * dt ) + final_power,
+                            // Linear ramp for testing
+                            power: final_power,
+
+                            // power: ( 0.187 / (0.01 * 2.0 * 3.1415) ) * 2.0_f64.powf( - (  i as f64 * dt - 0.1 ).powf(2.0) / ( 2.0 * 0.01_f64.powf(2.0) ) ) + 7.0,
+                            direction: Vector3::x(),
+                            rayleigh_range: crate::laser::gaussian::calculate_rayleigh_range(&wavelength, &e_radius),
+                            ellipticity: 0.0
+                        }
+                    )
+                ]
+            )
+        }
+
+        }
 
 
     // Adding beam along the x direction
@@ -132,32 +190,8 @@ fn main() {
             x_vector: Vector3::y(),
             y_vector: Vector3::z(),
         })
-        .with(ramp)
+        .with(ramp.clone())
         .build();
-
-
-    // Creating a mutable frames vector for the ramp
-    let mut frames = vec![];
-
-    // Appending the ramp powers for each frame to the vector, this in the form of a paired list (time, componant value)
-    for i in 0..sim_length {
-        frames.append(
-            &mut vec![
-                (
-                    i as f64 * dt,
-                    GaussianBeam {
-                        intersection: Vector3::new(0.0, 0.0, 0.0),
-                        e_radius:  e_radius,
-                        // This is a exponetial ramp down of the power
-                        power: ( initial_power - final_power ) * 2.0_f64.powf( -1.0 * rate * i as f64 * dt ) + final_power,
-                        direction: Vector3::x(),
-                        rayleigh_range: crate::laser::gaussian::calculate_rayleigh_range(&wavelength, &e_radius),
-                        ellipticity: 0.0
-                    }
-                )
-            ]
-        )
-    }
 
     // Adding beam along the y direction
     let gaussian_beam = GaussianBeam {
@@ -169,11 +203,6 @@ fn main() {
         ellipticity: 0.0,
     };
 
-    let ramp = Ramp{
-        prev: 0,
-        keyframes: frames,
-    };
-
     sim.world
         .create_entity()
         .with(gaussian_beam)
@@ -182,15 +211,43 @@ fn main() {
             x_vector: Vector3::x(),
             y_vector: Vector3::z(),
         })
-        .with(ramp)
+        .with(ramp.clone())
         .build();
 
-    let p_dist = Normal::new(0.0, 50e-6).unwrap();
-    let v_dist = Normal::new(0.0, 0.004).unwrap(); // ~100nK
+
+    let mut rng = rand::thread_rng();
+    let x: u8 = rng.gen();
+    // use a fixed seed random generator from the rand crate
+    let mut random_generator = ChaCha8Rng::seed_from_u64(x.into());
+
+    let cluster_xy = MultivariateGaussian::new(
+            Matrix::column(vec![ 0.0, 0.0 ]),
+            Matrix::from(vec![
+                vec![ 6.390371318625299e-11, 0.0 ],
+                vec![ 0.0, 4.7799785348289716e-04  ]
+                ])
+            );
+
+    let cluster_z = MultivariateGaussian::new(
+            Matrix::column(vec![ 0.0, 0.0 ]),
+            Matrix::from(vec![
+                vec![ 3.195234569049243e-11, 0.0 ],
+                vec![ 0.0, 4.7799785348289716e-04 ]
+                ])
+            );
+
+    // Generate points for each cluster
+    let points = 1;
+    let mut random_numbers: DistIter<Standard, &mut ChaCha8Rng, f64> = (&mut random_generator).sample_iter(Standard);
 
     // Create a single test atom
-    let atom_number = 10_000;
+    let atom_number = 2_500;
     for _ in 0..atom_number {
+
+        let x_points = cluster_xy.draw( &mut random_numbers, points).unwrap();
+        let y_points = cluster_xy.draw( &mut random_numbers, points).unwrap();
+        let z_points = cluster_z.draw( &mut random_numbers, points).unwrap();
+
         sim.world
             .create_entity()
             .with(Atom)
@@ -198,20 +255,21 @@ fn main() {
             .with(Force::new())
             .with(Position {
                 pos: Vector3::new(
-                    p_dist.sample(&mut rand::thread_rng()),
-                    p_dist.sample(&mut rand::thread_rng()),
-                    p_dist.sample(&mut rand::thread_rng()),
+                    x_points.get(0,0),
+                    y_points.get(0,0),
+                    z_points.get(0,0),
                 ),
             })
             .with(Velocity {
                 vel: Vector3::new(
-                    v_dist.sample(&mut rand::thread_rng()),
-                    v_dist.sample(&mut rand::thread_rng()),
-                    v_dist.sample(&mut rand::thread_rng()),
+                    x_points.get(0,1),
+                    y_points.get(0,1),
+                    z_points.get(0,1),
                 ),
             })
+
             .with(dipole::Polarizability::calculate_for(
-                wavelength, 461e-9, 32.0e6,
+                wavelength, 461e-9, 2.1e8,
             ))
             .with(lib::initiate::NewlyCreated)
             .build();
@@ -219,7 +277,7 @@ fn main() {
 
     sim.world.insert(ApplyCollisionsOption);
     sim.world.insert(CollisionParameters {
-        macroparticle: 4e2,
+        macroparticle: 4e2,        //The number of real partcles per particle simulated
         box_number: 1000,          //Any number large enough to cover entire cloud with collision boxes. Overestimating box number will not affect performance.
         box_width: 1e-6,           //Too few particles per box will both underestimate collision rate and cause large statistical fluctuations.
                                    //Boxes must also be smaller than typical length scale of density variations within the cloud, since the collisions model treats gas within a box as homogeneous.
@@ -237,7 +295,7 @@ fn main() {
     sim.world.insert(Timestep { delta: dt });
     //Timestep must also be much smaller than mean collision time
 
-    let mut filename = File::create("D:/data_1/collisions_ramp_test_00.txt").expect("Cannot create file.");
+    let mut filename = File::create("D:/data_1/collisions_ramp_test_007.txt").expect("Cannot create file.");
 
     // Run the simulation for a number of steps.
     for _i in 0..sim_length {
